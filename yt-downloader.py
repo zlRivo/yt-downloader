@@ -1,7 +1,10 @@
+import pytube.request
 from pytube import YouTube
 from tkinter import filedialog
 from tkinter import messagebox
+from tkinter import ttk
 import tkinter as tk
+import threading
 import pathlib
 import json
 import os
@@ -19,6 +22,8 @@ class App:
         self.root.geometry('300x160')
 
         self.config = None
+        self.dl_thread = None
+        self.dl_size = 0
 
         # Create menu bar
         self.menu_bar = tk.Menu(self.root)
@@ -59,6 +64,10 @@ class App:
         self.dl_button = tk.Button(self.root, text='Download', command=self.download_video)
         self.dl_button.pack()
 
+        # Progress bar
+        self.progress_bar = ttk.Progressbar(self.root, orient='horizontal')
+        self.progress_bar.pack()
+
         # Full config file path
         self.config_file = pathlib.Path(os.getenv('LOCALAPPDATA')).joinpath(YT_DOWNLOADER_CONFIG)
 
@@ -68,18 +77,40 @@ class App:
             self.show_config_file_error_dialog()
     
     def download_video(self):
+        self.dl_thread = threading.Thread(target=self.download_worker, args=())
+        self.dl_thread.start()
+    
+    def download_worker(self):
         download_dir = pathlib.Path(self.config[CONFIG_TARGET_DIR_KEY])
         if not download_dir.is_dir():
             return
-        
+
         only_audio, extension = (True, MP3_EXTENSION) if self.radio_val.get() == 0 else (False, MP4_EXTENSION)
+        final_path = download_dir.joinpath(self.dest_filename.get() + extension)
+
+        if os.path.exists(final_path):
+            messagebox.showwarning('Warning', 'Existing filename.')
+            return
 
         # Download file
-        yt = YouTube(self.vid_url_entry.get())
+        yt = YouTube(self.vid_url_entry.get(), on_progress_callback=self.download_worker_progress, \
+            on_complete_callback=self.download_worker_completed)
+
         video = yt.streams.filter(only_audio=only_audio).first()
+        self.dl_size = yt.streams.filter(only_audio=only_audio).first().filesize
         output_name = video.download(output_path=download_dir)
-        os.rename(output_name, download_dir.joinpath(self.dest_filename.get() + extension)) # Rename file
+
+        os.rename(output_name, final_path) # Rename file
         messagebox.showinfo('Info', 'Completed.')
+    
+    def download_worker_progress(self, stream, chunk, bytes_remaining):
+        self.progress_bar['value'] = int((self.dl_size - bytes_remaining) / self.dl_size * 100)
+        self.progress_bar.pack()
+        
+    def download_worker_completed(self, *args):
+        self.progress_bar['value'] = 0
+        self.progress_bar.pack()
+        self.dl_size = 0
     
     def show_config_file_error_dialog(self):
         if messagebox.askyesno('Error', message='Failed to load config file. Recreate it?', icon='error'):
